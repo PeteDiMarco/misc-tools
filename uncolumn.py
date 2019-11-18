@@ -34,7 +34,6 @@
 
 import os
 import sys
-import re
 import argparse
 
 # Defaults:
@@ -53,6 +52,16 @@ the third.
 """
 
 
+def print_error(msg: str, outfile=sys.stderr, raw: bool = False, error: int = 1):
+    """
+    Print an error message and exit.
+    """
+    if not raw:
+        msg = "ERROR: " + msg + "\n"
+    outfile.write(msg)
+    exit(error)
+
+
 if __name__ == "__main__":
     # Parse command line arguments:
     parser = argparse.ArgumentParser(
@@ -64,6 +73,7 @@ if __name__ == "__main__":
         "-c",
         "--columns",
         type=str,
+        required=True,
         help="Start position of text columns separated by commas.  Counts from 1.",
     )
     parser.add_argument(
@@ -108,18 +118,21 @@ if __name__ == "__main__":
 
     # Parse and normalize column numbers.
     column_inds = []
+    prev = -1
     for c in args.columns.split(","):
-        col = int(c.strip()) - 1
+        try:
+            col = int(c.strip()) - 1
+        except ValueError:
+            print_error(f"Bad value for column number ({c}).")
         if col < 0:
-            print("Column number must be greater than 0.")
-            parser.print_help()
-            exit(1)
+            print_error("Column number must be greater than 0.")
+        if col <= prev:
+            print_error("Column numbers must be in ascending order.")
+        prev = col
         column_inds.append(col)
 
     if len(column_inds) < 1:
-        print("Enter a list of 1 or more column numbers separated by commas.")
-        parser.print_help()
-        exit(1)
+        print_error("Enter a list of 1 or more column numbers separated by commas.")
 
     # The first column always starts with 0.
     if column_inds[0] != 0:
@@ -128,25 +141,30 @@ if __name__ == "__main__":
     if column_inds[-1] != -1:
         column_inds.append(-1)
 
+    if args.tabsize < 0:
+        print_error("Tab size must be at least 0.")
+
     # If no input file, use stdin:
     if not args.input:
         infile = sys.stdin
     elif os.path.exists(args.input):
-        infile = open(args.input, "r")
+        try:
+            infile = open(args.input, "r")
+        except:
+            print_error("Unable to open input file.")
     else:
-        print("Unable to open input file.")
-        parser.print_help()
-        exit(1)
+        print_error("Input file does not exist.")
 
     # If no output file, use stdout:
     if not args.output:
         outfile = sys.stdout
     elif not os.path.exists(args.output) or args.force:
-        outfile = open(args.output, "w")
+        try:
+            outfile = open(args.output, "w")
+        except:
+            print_error("Unable to open output file.")
     else:
-        print("Unable to open output file.")
-        parser.print_help()
-        exit(1)
+        print_error("Output file already exists.  Use -f to force overwrite.")
 
     # Create a list of slice objects to apply to lines of the file.
     slices = []
@@ -168,4 +186,3 @@ if __name__ == "__main__":
     outfile.close()
 
     exit(0)
-
