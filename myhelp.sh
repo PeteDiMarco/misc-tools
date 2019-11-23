@@ -21,95 +21,129 @@
 # Written by: Pete DiMarco <pete.dimarco.software@gmail.com>
 #
 # Description:
+# A "super help" command that tries to identify the name(s) provided on the
+# commandline.
 #
 # See also:
 # http://mywiki.wooledge.org/BashFAQ/081
 #
 # Dependencies:
-# whatis, apropos, file, type, which, alias
-# TODO: add ps -e
+# whatis, apropos, file, type, which, alias, info, ps
 
 # Defaults:
 DEBUG=false
-my_name=$(basename "$0")     # This script's name.
-my_shell=$(basename "$BASH")		# This script's shell.
+my_name=$(basename "$0")              # This script's name.
+my_shell=$(basename "$BASH")		      # This script's shell.
 preferred_shell=$(basename "$SHELL")	# User's shell from passwd.
 declare -A aliases=()
 
 
+#***************************************************************************
+# Functions
+#***************************************************************************
+
+#***************************************************************************
+# Name:         print_declare
+# Description:  Uses the `declare` built-in to determine if $1 is a declared
+#               variable or function.  Prints the results.
+# Parameters:   $1: Name to look for.
+# Returns:      None
+#***************************************************************************
 print_declare () {
-    declare -a lines
-    local line
     local retval
     local value
+    local attrs
+    local attr
+    local name
+    local full_desc
+    local desc
+    declare -A attr_desc
+    attr_desc['-']='shell variable'
+    attr_desc['a']='indexed array'
+    attr_desc['A']='associative array'
+    attr_desc['i']='integer'
+    attr_desc['r']='read-only'
+    attr_desc['x']='exported'
 
-    retval=$(declare "$2" | sed -e "s/^declare $2 //" | grep "^$1")
+    full_desc=''
+    retval=$(declare -p "$1" | grep '^declare ' | sed -e 's/^declare \(-[^ ]*\) \(.*\)$/\1 \2/')
     if [[ $? -eq 0 ]]; then
         debug_msg "print_declare: retval=${retval}"
-        IFS='\n' read -ra lines <<< "$retval"
-        for line in ${lines[@]}; do
-            if [[ "$line" =~ ^"$1"=.*$ ]]; then
-                #value=`echo "$retval" | sed -e 's/^[^=]*=//'`
-                value=${"$1"}
-                echo "$1 is declared as type $3 with the value $value"
-            elif [[ "$line" =~ ^"$1" ().*$ ]]; then
-                echo "$1 is declared as type $3"
-            elif [[ "$line" =~ ^"$1"$ ]]; then
-                echo "$1 is declared as type $3 with no value"
+        attrs=$(echo $retval | sed -e 's/^-\([^ ]*\) .*$/\1/' | sed -e 's/\(.\)/\1 /g' )
+        name=$(echo $retval | sed -e 's/^[^ ]* //')
+        value=''
+        if [[ "${name}" == *=* ]]; then
+          value=$(echo $name | sed -e 's/^[^=]*=//')
+          name=$(echo $name | sed -e 's/=.*$//')
+        fi
+
+        for attr in ${attrs}; do
+            desc="${attr_desc[$attr]}"
+            if [[ -n "${desc}" ]]; then
+                if [[ -z "${full_desc}" ]]; then
+                    full_desc="${desc}"
+                else
+                    full_desc="${full_desc}, ${desc}"
+                fi
             else
-                echo "Cannot recognize $line"
-                #exit 1
-                return 1
+                echo "Unknown attribute: ${attr}"
             fi
         done
+
+        echo "$1 is declared with the following attributes: ${full_desc}"
+        if [[ -n "${value}" ]]; then
+            echo "$1 has the value: ${value}"
+        fi
+    fi
+
+    retval=$(declare -f "$1")
+    if [[ $? -eq 0 ]]; then
+        echo "$1 is declared as a function."
     fi
 }
 
-
-check_declares () {
-    debug_msg "check_declares($1)"
-    print_declare "$1" '-r' 'read only'
-    print_declare "$1" '-i' 'integer'
-    print_declare "$1" '-a' 'array'
-    print_declare "$1" '-f' 'function'
-    print_declare "$1" '-x' 'exported'
-}
-
-
+#***************************************************************************
+# Name:         parse_type
+# Description:  Parses the output of the `type` built-in.  Prints the results.
+# Parameters:   $1: Text to parse.
+#               $2: Name being examined.
+# Returns:      3 if the type is unrecognized.
+#***************************************************************************
 parse_type () {
     debug_msg "parse_type $1 $2"
     declare -a array
-    IFS='\n' read -ra array <<< "$1"
+    IFS=$'\r\n' read -ra array <<< "$1"
     length=${#array[@]}
     index=0
     while [[ $index < $length ]]; do
-        case ${array[$index]} in
-            "* is a function")
+        debug_msg "${index} -> ${array[$index]}"
+        case "${array[$index]}" in
+            *\ is\ a\ function)
                 echo ${array[$index]}
                 ;;
 
-            "* is a shell keyword")
-                echo ${array[$index]}
-                help -d "$2"
-                ;;
-
-            "* is a shell builtin")
+            *\ is\ a\ shell\ keyword)
                 echo ${array[$index]}
                 help -d "$2"
                 ;;
 
-            "* is aliased to *")
+            *\ is\ a\ shell\ builtin)
+                echo ${array[$index]}
+                help -d "$2"
+                ;;
+
+            *\ is\ aliased\ to\ *)
                 echo ${array[$index]}
                 ;;
 
-            "* \(\)")
+            *\ \(\))
                 index=$((index + 1))
-                while [[ ! ${array[$index]} =~ ^\}[ 	]*$ ]]; do
+                while [[ ! ${array[$index]} =~ ^\}\s*$ ]]; do
                     index=$((index + 1))
                 done
                 ;;
 
-            "* is *")
+            *\ is\ *)
                 filename=$(echo ${array[$index]} | sed -e 's/^.* is //')
                 echo "$2 is the executable file $filename"
                 file -b "$filename"
@@ -121,36 +155,67 @@ parse_type () {
                 return 3
                 ;;
         esac
+        index=$((index + 1))
     done
 }
 
-
+#***************************************************************************
+# Name:         debug_msg
+# Description:  Prints the message if $DEBUG is true.
+# Parameters:   $1: Message.
+# Returns:      None.
+#***************************************************************************
 debug_msg () {
     if [[ "$DEBUG" = true ]]; then
         echo 'DEBUG: '"$1"
     fi
 }
 
-
+#***************************************************************************
+# Name:         print_help
+# Description:  Prints the help text and exits the script.
+# Parameters:   None.
+# Returns:      None.
+#***************************************************************************
 print_help () {
     cat <<HelpInfoHERE
-Usage: ${my_name} [-h] [-D] name1 [name2 ...]
+Usage: ${my_name} [-h] [-D] [-a] name1 [name2 ...]
 
-Identifies the names provided.  Tries every test imaginable.
+Identifies the names provided.  Tries every test imaginable.  Looks for:
+man pages, info pages, executables in PATH, aliases, shell variables, running
+processes, shell functions, built-in shell commands, and files relative to
+the current working directory.  If called in its own subshell, this script will
+not be able to identify variables from the parent shell unless they are
+exported.  To get around this, use either:
+    source ${my_name} name1 ...
+or pipe the current aliases into the script:
+    alias | ${my_name} -a name1 ...
 
 Optional Arguments:
   -h, --help            Show this help message and exit.
   -a, --aliases         Read a list of aliases from standard input.
-  -D, --DEBUG	        	Set debugging mode.
+  -D, --DEBUG	          Set debugging mode.
 HelpInfoHERE
+    exit 0
 }
 
+
+#***************************************************************************
+# Main Code
+#***************************************************************************
+
+# Get the names of all the running processes.
+# Process names in brackets []:
+progs=$(ps --no-headers -Ao args -ww | grep '^\[' | sed -Ee 's/^\[([^]/:]+).*$/\1/')
+# Process names without brackets:
+progs=${progs}$(ps --no-headers -Ao args -ww | grep -v '^\[' | sed -e 's/ .*$//')
+progs=$(echo "${progs}" | sort | uniq | xargs basename -a)
+debug_msg "Programs running: ${progs}"
 
 # Make sure we have the correct version of get_opt:
 getopt --test > /dev/null
 if [[ $? -ne 4 ]]; then
     echo "ERROR: This script requires the enhanced version of 'getopt'."
-    echo "       (Or better yet, rewrite this script in Python.)"
     #exit 4
     return 4
 fi
@@ -162,6 +227,7 @@ LONGOPTIONS='help,DEBUG,aliases'
 PARSED=$(getopt --options=$OPTIONS --longoptions=$LONGOPTIONS --name "$0" -- "$@")
 if [[ $? -ne 0 ]]; then
     # If getopt has complained about wrong arguments to stdout:
+    echo 'Bad arguments.'
     #exit 2
     return 2
 fi
@@ -185,8 +251,8 @@ while true; do
 
         -a|--aliases)
             while IFS= read -r line; do
-                key=`echo "$line" | sed -e 's/^alias \([^=]*\).*$/\1/'`
-                val=`echo "$line" | sed -e 's/^[^=]*=\(.*\)$/\1/'`
+                key=$(echo "$line" | sed -e 's/^alias \([^=]*\).*$/\1/')
+                val=$(echo "$line" | sed -e 's/^[^=]*=\(.*\)$/\1/')
                 aliases["$key"]="$val"
             done
             shift
@@ -206,7 +272,7 @@ while true; do
     esac
 done
 
-
+# Determine command for searching man pages.
 which whatis >/dev/null
 if [[ $? -eq 0 ]]; then
     whatis_cmd='whatis'
@@ -215,62 +281,84 @@ else
     if [[ $? -eq 0 ]]; then
         whatis_cmd='apropos'
     else
-        whatis_cmd='asdassd #'
+        whatis_cmd='asdassd #'   # This should always fail.
     fi
 fi
 
+# We need a temporary file to store the output of `alias`.
 temp_file=$(mktemp /tmp/${my_name}.XXXXXX)
 trap "rm -f $temp_file" 0 2 3 15
 
+NO_SUCH_FILE_REGEX='.*No such file or directory.*'
+
+# Iterate through all remaining arguments.
 while [[ $# -ne 0 ]]; do
-    if [[ -z "$1" ]]; then
+    debug_msg "Examining ${1}."
+
+    if [[ -z "$1" ]]; then    # Skip over blanks.
         shift
         continue
     fi
 
-    debug_msg "before type"
+    reference=${!1}       # If $1 is a shell variable, what is its value?
+    if [[ -n "${reference}" ]]; then
+      echo "There is a shell variable named ${1} with value: ${reference}"
+    fi
 
-    retval=$(type -a "$1" 2>/dev/null)
+    # Use `type` built-in.
+    retval=$( type -a "$1" 2>/dev/null )
     if [[ $? -eq 0 ]]; then
         parse_type "$retval" "$1"
     else
-        check_declares "$1"
+        print_declare "$1"
     fi
-    debug_msg "type = $retval"
 
+    # Test with `file`.
     retval=$( file -b "$1" )
-    if [[ ( $? -eq 0 ) && !( "$retval" =~ .*No such file or directory.* ) ]]; then
+    if [[ $? -eq 0 ]] && ! [[ "${retval}" =~ $NO_SUCH_FILE_REGEX ]]; then
         echo "File $1 is $retval"
     fi
-    debug_msg "file -b = $retval"
 
-#    retval=`info "$1" 2>&1  >/dev/null`
-#    if [[ -n "$retval" ]]; then
-#        echo "There is an \"info\" page for $1"
-#    fi
+    # Check if `info` has a page.
+    INFO_NO_MENU_REGEX='^info: No menu item .*'
+    INFO_NO_NODE_REGEX='^info: Cannot find node .*'
+    retval=$( info -o - "$1" 2>&1 )
+    if [[ -n "$retval" ]] && ! [[ "$retval" =~ $INFO_NO_MENU_REGEX ]] \
+          && ! [[ "$retval" =~ $INFO_NO_NODE_REGEX ]]; then
+        echo "There is an \"info\" page for $1."
+    fi
 
+    # Use `which`.
     retval=$( which -a "$1" 2>/dev/null )
     if [[ $? -eq 0 ]]; then
         echo "There is an executable called $1 here: $retval"
         retval=$( file -b "$retval" )
-        if [[ ( $? -eq 0 ) && "$retval" =~ .*No such file or directory.* ]]; then
+        if [[ $? -eq 0 ]] && ! [[ "${retval}" =~ $NO_SUCH_FILE_REGEX ]]; then
             echo "File $1 is $retval"
         fi
     fi
 
-    debug_msg "whatis_cmd = $whatis_cmd"
+    # Check for a `man` page.
     retval=$( ${whatis_cmd} "$1" 2>/dev/null )
     if [[ $? -eq 0 ]]; then
         echo "There is an \"man\" page for $1: $retval"
     fi
 
-    alias "$1" 2>/dev/null > $temp_file
+    # Check aliases in the current shell.
+    alias "$1" 2>/dev/null > $temp_file     # Can't create sub-shell w/o losing aliases.
     if [[ $? -eq 0 ]]; then
         echo "There is an alias for $1: $(cat $temp_file)"
     fi
 
-    if [[ -n aliases["$1"] ]]; then
-        echo "There is an alias for $1: $(aliases[$1]) in stdin."
+    # If aliases are piped in:
+    if [[ -n "${aliases[$1]}" ]]; then
+        echo "There is an alias for $1: ${aliases[$1]} in stdin."
+    fi
+
+    # Is this program running?
+    echo "${progs}" | grep "^$1\$" >/dev/null
+    if [[ $? -eq 0 ]]; then
+        echo "There is at least one process running called $1."
     fi
 
     shift

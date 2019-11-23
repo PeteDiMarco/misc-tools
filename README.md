@@ -1,73 +1,65 @@
 # Miscellaneous Linux Commandline Tools
 
-One Paragraph of project description goes here
-
-## Getting Started
-
-These instructions will get you a copy of the project up and running on your local machine fo
-r development and testing purposes. See deployment for notes on how to deploy the project on 
-a live system.
+This is a collection of miscellaneous commandline tools for Posix-like environments.
 
 ### Prerequisites
 
-What things you need to install the software and how to install them
-
-```
-Give examples
-```
+* Python 3.x
+* Bash
 
 ### Installing
 
-A step by step series of examples that tell you how to get a development env running
+Just copy the files into your local bin directory.  `pagedls.sh` should be aliased to
+something more convenient.  To use `myhelp.sh`, create an alias like this:
 
-Say what the step will be
+    alias myhelp="source myhelp.sh"
 
-```
-Give the example
-```
+## Tool Descriptions
 
-And repeat
+### pagedls.sh
 
-```
-until finished
-```
+Pipes the output of `ls` through a pager without losing any of the formatting or colors that would appear
+when `ls` outputs directly to a terminal.  The default pager is `more`.  Passes all
+arguments except `--help`
+and `--DEBUG` to `ls`.  `pagedls.sh` reads the following shell variables:
 
-End with an example of getting some data out of the system or using it for a little demo
+*  `LS_OPTIONS` - Standard options to `ls`.
+*  `QUOTING_STYLE` - Used by `ls` to format file names.
+*  `PAGEDLS_OPTIONS` - Additional options to `ls`.  May override `LS_OPTIONS`.
+*  `PAGEDLS_PAGER` - User's preferred pager.
+*  `PAGER` - If `PAGEDLS_PAGER` is not defined, use this as the pager.
+*  `MORE` -  Parameters to `more`.
+*  `LESS` -  Parameters to `less`.
 
-## Running the tests
 
-Explain how to run the automated tests for this system
+### myhelp.sh
 
-### Break down into end to end tests
+Tries to identify every name provided.  Looks at man pages, info pages, command PATH, aliases, files,
+shell variables, and built-in shell commands.
 
-Explain what these tests test and why
+In order for `myhelp.sh`
+to read the current shell's variables, this script must either:
+1. be run with the `source` command, or
+2. have the output of `alias` piped to it.
 
-```
-Give an example
-```
+### otc.py
 
-### And coding style tests
+Implements a cipher similar to a one-time pad.  A binary file can be encrypted
+into a text file containing integers with 1 integer per line.  This is done
+using a very large binary file as a map.  The map file is accessed either
+locally or via a URL.  Decryption is accomplished
+by reading the numbers in the encrypted file and using them as indexes into the
+map.  Each number in the encrypted file is the index of 1 byte in the map file.
 
-Explain what these tests test and why
+### uncolumn.py
 
-```
-Give an example
-```
+This program will parse a text file that contains multiple columns of text
+and return a file of text with those columns in proper sequential order.
+It is the opposite of the `column` command.
 
-## Deployment
+### untypescript.sh
 
-Add additional notes about how to deploy this on a live system
-
-## Built With
-
-* [Dropwizard](http://www.dropwizard.io/1.0.2/docs/) - The web framework used
-* [Maven](https://maven.apache.org/) - Dependency Management
-* [ROME](https://rometools.github.io/rome/) - Used to generate RSS Feeds
-
-## Contributing
-
-Please read [CONTRIBUTING.md](https://gist.github.com/PurpleBooth/b24679402957c63ec426) for d
-etails on our code of conduct, and the process for submitting pull requests to us.
+Strips newlines and ANSI color codes from typescript files.
 
 ## Versioning
 

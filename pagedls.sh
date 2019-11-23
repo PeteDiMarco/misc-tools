@@ -14,7 +14,7 @@
 #  limitations under the License.
 # *****************************************************************************
 #
-# Name:         lsmore.sh
+# Name:         pagedls.sh
 # Version:      0.1
 # Written by:   Pete DiMarco <pete.dimarco.software@gmail.com>
 # Date:         2019-11-12
@@ -30,22 +30,23 @@ ls_cmd="$(which ls)"
 my_name=$(basename "${0}")
 DEBUG=false
 
-
+# Prints a debug message.
 debug_msg () {
   if [[ "$DEBUG" = true ]]; then
     echo -e "$*"
   fi
 }
 
-
+# Prints help message.
 print_help () {
   cat <<HelpInfoHERE
 Usage: ${my_name} [--help]
        ${my_name} [--DEBUG] <LS-ARGUMENTS>
 
-Pipes the output of "${ls_cmd}" through a pager.  The default pager is
-"${default_pager}".  All of <LS-ARGUMENTS> are passed to "${ls_cmd}".  Tries to
-duplicate the behavior of "${ls_cmd}" when its output is a terminal.
+Pipes the output of "${ls_cmd}" through a pager without losing any of the
+formatting or colors that would appear when "${ls_cmd}" outputs directly to
+a terminal.  The default pager is "${default_pager}".  Passes all arguments
+except "--help" and "--DEBUG" to "${ls_cmd}".
 
 Optional Arguments:
   --help                Show this help message and exit.
@@ -53,10 +54,10 @@ Optional Arguments:
 
 Shell Variables:
   LS_OPTIONS            Standard options to "ls".
-  LSMORE_OPTION         Additional options to "ls".  May override LS_OPTIONS.
+  PAGEDLS_OPTIONS       Additional options to "ls".  May override LS_OPTIONS.
   QUOTING_STYLE         Used by "ls" to format file names.
-  LSMORE_PAGER          User's preferred pager.
-  PAGER                 If LSMORE_PAGER is not defined, use this as the pager.
+  PAGEDLS_PAGER         User's preferred pager.
+  PAGER                 If PAGEDLS_PAGER is not defined, use this as the pager.
   MORE                  Parameters to "more".
   LESS                  Parameters to "less".
 HelpInfoHERE
@@ -83,32 +84,32 @@ else
   fi
 fi
 
-# lsmore_opts is built from LS_OPTIONS.  If LS_OPTIONS contains "--color=auto"
+# pagedls_opts is built from LS_OPTIONS.  If LS_OPTIONS contains "--color=auto"
 # replace it with --color=always so that ls will pipe colors to more.
-lsmore_opts=""
+pagedls_opts=""
 if [[ -n "${LS_OPTIONS}" ]]; then
-  lsmore_opts="$(echo -e ${LS_OPTIONS} | sed -E 's/(^|[[:space:]])--color=auto($|[[:space:]])/ --color=always /')"
+  pagedls_opts="$(echo -e ${LS_OPTIONS} | sed -E 's/(^|[[:space:]])--color=auto($|[[:space:]])/ --color=always /')"
 fi
 
-# Add LSMORE_OPTIONS to lsmore_opts:
-lsmore_opts="${lsmore_opts} ${LSMORE_OPTIONS}"
+# Add PAGEDLS_OPTIONS to pagedls_opts:
+pagedls_opts="${pagedls_opts} ${PAGEDLS_OPTIONS}"
 
-# If lsmore_opts doesn't contain a "-1" option, then force ls to pipe columns
+# If pagedls_opts doesn't contain a "-1" option, then force ls to pipe columns
 # of file names to more.
-if ! (echo -e "${lsmore_opts}" | grep -Eqe '(^|[[:space:]])-[[:alpha:]]*1'); then
+if ! (echo -e "${pagedls_opts}" | grep -Eqe '(^|[[:space:]])-[[:alpha:]]*1'); then
   # Get the number of columns from the terminal:
   columns=$(tput cols)
 
   # Check if the user supplied "--width=" or "-w" as an option:
-  if (echo -e "${lsmore_opts}" | grep -Eqe '(^|[[:space:]])(--width=[0-9]*|-[[:alpha:]]*w)'); then
-    lsmore_opts="${lsmore_opts} -C"
+  if (echo -e "${pagedls_opts}" | grep -Eqe '(^|[[:space:]])(--width=[0-9]*|-[[:alpha:]]*w)'); then
+    pagedls_opts="${pagedls_opts} -C"
   # Else if "tput cols" didn't work, use default_cols:
   elif [[ -z "${columns}" ]]; then
     debug_msg "WARNING: Cannot determine column width of terminal. Assuming ${default_cols}."
-    lsmore_opts="${lsmore_opts} -C --width=${default_cols}"
+    pagedls_opts="${pagedls_opts} -C --width=${default_cols}"
   # Else use columns from the terminal:
   else
-    lsmore_opts="${lsmore_opts} -C --width=${columns}"
+    pagedls_opts="${pagedls_opts} -C --width=${columns}"
   fi
 fi
 
@@ -119,16 +120,18 @@ match_quote='(^|[[:space:]])(-([[:alpha:]]*[NQ]+[[:alpha:]]*)+|--literal|--quoti
 # If the user did not specify a QUOTING_STYLE:
 if [[ -z "${QUOTING_STYLE}" ]]; then
   # If the user did not pass a parameter affecting quoting style:
-  if ! (echo -e "${lsmore_opts}" | grep -Eqe "${match_quote}"); then
+  if ! (echo -e "${pagedls_opts}" | grep -Eqe "${match_quote}"); then
     # Use the standard quoting style for when ls sends its output to the terminal:
-    lsmore_opts="${lsmore_opts} --quoting-style=shell-escape"
+    pagedls_opts="${pagedls_opts} --quoting-style=shell-escape"
   fi
 fi
 
 # Figure out which pager to use:
-if [[ -n "${LSMORE_PAGER}" ]]; then
-  pager="${LSMORE_PAGER}"
+if [[ -n "${PAGEDLS_PAGER}" ]]; then
+  debug_msg 'Using PAGEDLS_PAGER.'
+  pager="${PAGEDLS_PAGER}"
 elif [[ -n "${PAGER}" ]]; then
+  debug_msg 'Using PAGER.'
   pager="${PAGER}"
 else
   pager="${default_pager}"
@@ -143,7 +146,7 @@ case "$(basename ${pager})" in
 
   'less')
     pager_opts="${LESS}"
-    if (echo -e "${lsmore_opts}" | grep -Eqe '(^|[[:space:]])--color=(always|auto)'); then
+    if (echo -e "${pagedls_opts}" | grep -Eqe '(^|[[:space:]])--color=(always|auto)'); then
       pager_opts="${pager_opts} -R"   # Output ANSI "color" escape sequences in "raw" form.
     fi
     ;;
@@ -153,6 +156,6 @@ case "$(basename ${pager})" in
     ;;
 esac
 
-debug_msg "Command to run: ${ls_cmd}" ${lsmore_opts} ${params} '|' "${pager}" ${pager_opts}
-"${ls_cmd}" ${lsmore_opts} ${params} | "${pager}" ${pager_opts}
+debug_msg "Command to run: ${ls_cmd}" ${pagedls_opts} ${params} '|' "${pager}" ${pager_opts}
+"${ls_cmd}" ${pagedls_opts} ${params} | "${pager}" ${pager_opts}
 
