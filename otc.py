@@ -127,18 +127,17 @@ def open_output_file(file_name: str, binary: bool, force: bool = False):
             raise FileExistsError(file_name)
 
 
-class EncryptMap(dict):
+class EncryptMap:
     """
     A dictionary that maps byte values (0-255) to lists of indexes into a file.
     """
 
-    class TrackedList(list):
+    class TrackedList:
         """
         A list with an built-in index to the next available element.
         """
 
         def __init__(self, first):
-            super().__init__()
             self.index = 0
             self.list = [first]
 
@@ -160,7 +159,6 @@ class EncryptMap(dict):
         :param strict: Never reuse an index in the map file.
         :type strict: bool
         """
-        super().__init__()
         self.map_fp = map_fp
         self.strict = strict
         self.map = dict()
@@ -422,7 +420,12 @@ if __name__ == "__main__":
             map_obj = EncryptMap(map_fp, args.strict)
             byte = input_fp.read(1)
             while len(byte) == 1:
-                output_fp.write(f"{map_obj.encode(byte[0]):d}\n")
+                try:
+                    index = map_obj.encode(byte[0])
+                except MapError:
+                    print(f'ERROR: Map file "{args.map}" is too small to use with --strict.')
+                    exit(1)
+                output_fp.write(f"{index:d}\n")
                 byte = input_fp.read(1)
 
     map_fp.close()
