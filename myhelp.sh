@@ -28,14 +28,18 @@
 # http://mywiki.wooledge.org/BashFAQ/081
 #
 # Dependencies:
-# whatis, apropos, file, type, which, alias, info, ps
+# man, file, type, which, alias, info, ps
 
 # Defaults:
 DEBUG=false
-my_name=$(basename "$0")              # This script's name.
-my_shell=$(basename "$BASH")		      # This script's shell.
+FOUND=false				# Found something about current argument.
+my_name=$(basename "$0")		# This script's name.
+my_shell=$(basename "$BASH")		# This script's shell.
 preferred_shell=$(basename "$SHELL")	# User's shell from passwd.
-declare -A aliases=()
+declare -A aliases=()			# Hash of aliases to values.
+
+NO_SUCH_FILE_REGEX='.*No such file or directory.*'
+SHELL_VAR_REGEX='^\$.+$'
 
 
 #***************************************************************************
@@ -47,17 +51,14 @@ declare -A aliases=()
 # Description:  Uses the `declare` built-in to determine if $1 is a declared
 #               variable or function.  Prints the results.
 # Parameters:   $1: Name to look for.
+# Globals:      FOUND
 # Returns:      None
 #***************************************************************************
 print_declare () {
-    local retval
-    local value
-    local attrs
-    local attr
-    local name
-    local full_desc
-    local desc
-    declare -A attr_desc
+    local retval value attrs attr name full_desc='' desc
+    local -A attr_desc
+
+    # Map `declare` attributes to descriptions.
     attr_desc['-']='shell variable'
     attr_desc['a']='indexed array'
     attr_desc['A']='associative array'
@@ -65,9 +66,9 @@ print_declare () {
     attr_desc['r']='read-only'
     attr_desc['x']='exported'
 
-    full_desc=''
-    retval=$(declare -p "$1" | grep '^declare ' | sed -e 's/^declare \(-[^ ]*\) \(.*\)$/\1 \2/')
-    if [[ $? -eq 0 ]]; then
+    # Extract attributes followed by NAME or NAME=VALUE:
+    retval=$(declare -p "$1" 2>/dev/null | grep '^declare ' | sed -e 's/^declare \(-[^ ]*\) \(.*\)$/\1 \2/')
+    if [[ $? -eq 0 ]] && [[ -n "${retval}" ]]; then
         debug_msg "print_declare: retval=${retval}"
         attrs=$(echo $retval | sed -e 's/^-\([^ ]*\) .*$/\1/' | sed -e 's/\(.\)/\1 /g' )
         name=$(echo $retval | sed -e 's/^[^ ]* //')
@@ -77,6 +78,7 @@ print_declare () {
           name=$(echo $name | sed -e 's/=.*$//')
         fi
 
+        # For each attribute, add its description to full_desc:
         for attr in ${attrs}; do
             desc="${attr_desc[$attr]}"
             if [[ -n "${desc}" ]]; then
@@ -90,15 +92,19 @@ print_declare () {
             fi
         done
 
+        # Print results:
         echo "$1 is declared with the following attributes: ${full_desc}"
         if [[ -n "${value}" ]]; then
             echo "$1 has the value: ${value}"
+            FOUND=true
         fi
     fi
 
+    # Look for shell functions:
     retval=$(declare -f "$1")
     if [[ $? -eq 0 ]]; then
         echo "$1 is declared as a function."
+        FOUND=true
     fi
 }
 
@@ -107,33 +113,39 @@ print_declare () {
 # Description:  Parses the output of the `type` built-in.  Prints the results.
 # Parameters:   $1: Text to parse.
 #               $2: Name being examined.
+# Globals:      FOUND
 # Returns:      3 if the type is unrecognized.
 #***************************************************************************
 parse_type () {
+    local length index=0
+    local -a array
+
     debug_msg "parse_type $1 $2"
-    declare -a array
     IFS=$'\r\n' read -ra array <<< "$1"
     length=${#array[@]}
-    index=0
     while [[ $index < $length ]]; do
         debug_msg "${index} -> ${array[$index]}"
         case "${array[$index]}" in
             *\ is\ a\ function)
                 echo ${array[$index]}
+                FOUND=true
                 ;;
 
             *\ is\ a\ shell\ keyword)
                 echo ${array[$index]}
+                FOUND=true
                 help -d "$2"
                 ;;
 
             *\ is\ a\ shell\ builtin)
                 echo ${array[$index]}
+                FOUND=true
                 help -d "$2"
                 ;;
 
             *\ is\ aliased\ to\ *)
                 echo ${array[$index]}
+                FOUND=true
                 ;;
 
             *\ \(\))
@@ -146,7 +158,7 @@ parse_type () {
             *\ is\ *)
                 filename=$(echo ${array[$index]} | sed -e 's/^.* is //')
                 echo "$2 is the executable file $filename"
-                file -b "$filename"
+                FOUND=true
                 ;;
 
             *)
@@ -163,6 +175,7 @@ parse_type () {
 # Name:         debug_msg
 # Description:  Prints the message if $DEBUG is true.
 # Parameters:   $1: Message.
+# Globals:      DEBUG
 # Returns:      None.
 #***************************************************************************
 debug_msg () {
@@ -197,6 +210,46 @@ Optional Arguments:
   -D, --DEBUG	          Set debugging mode.
 HelpInfoHERE
     exit 0
+}
+
+#***************************************************************************
+# Name:         check_variable
+# Description:  Checks if parameter is a shell variable.  If it is, prints
+#               its value.
+# Parameters:   $1: Possible shell variable.
+# Globals:      FOUND
+# Returns:      None.
+#***************************************************************************
+check_variable () {
+    local reference
+    export bad_sub_test=$1
+    # Must check in sub-shell first to catch "bad substitution" errors.
+    bash -c 'echo "${!bad_sub_test}" 2>&1 >/dev/null' >/dev/null 2>&1
+    if [[ $? -eq 0 ]]; then
+        reference=${!1}       # If $1 is a shell variable, what is its value?
+        if [[ -n "${reference}" ]]; then
+            echo "There is a shell variable named ${1} with value: ${reference}"
+            FOUND=true
+        fi
+    fi
+}
+
+#***************************************************************************
+# Name:         print_file_type
+# Description:  Checks if parameter is a file.  Prints its file type.
+# Parameters:   $1: One or more possible file names.
+# Globals:      FOUND
+# Returns:      None.
+#***************************************************************************
+print_file_type () {
+    local retval line
+    for line in "$1"; do
+        retval=$( file -b "${line}" )
+        if [[ $? -eq 0 ]] && ! [[ "${retval}" =~ $NO_SUCH_FILE_REGEX ]]; then
+            echo "File ${line} is ${retval}."
+            FOUND=true
+        fi
+    done
 }
 
 
@@ -272,38 +325,31 @@ while true; do
     esac
 done
 
-# Determine command for searching man pages.
-which whatis >/dev/null
-if [[ $? -eq 0 ]]; then
-    whatis_cmd='whatis'
-else
-    which apropos >/dev/null
-    if [[ $? -eq 0 ]]; then
-        whatis_cmd='apropos'
-    else
-        whatis_cmd='asdassd #'   # This should always fail.
-    fi
-fi
 
 # We need a temporary file to store the output of `alias`.
 temp_file=$(mktemp /tmp/${my_name}.XXXXXX)
 trap "rm -f $temp_file" 0 2 3 15
 
-NO_SUCH_FILE_REGEX='.*No such file or directory.*'
+# If the user supplies more than 1 argument, print a blank line between each
+# report.
+separate=$(( $# > 1 ))
 
 # Iterate through all remaining arguments.
 while [[ $# -ne 0 ]]; do
     debug_msg "Examining ${1}."
+    FOUND=false
 
     if [[ -z "$1" ]]; then    # Skip over blanks.
         shift
         continue
     fi
 
-    reference=${!1}       # If $1 is a shell variable, what is its value?
-    if [[ -n "${reference}" ]]; then
-      echo "There is a shell variable named ${1} with value: ${reference}"
+    if [[ "$1" =~ $SHELL_VAR_REGEX ]]; then
+        retval=$( echo "$1" | sed -e 's/^\$//' )
+        check_variable "${retval}"
     fi
+
+    check_variable "$1"
 
     # Use `type` built-in.
     retval=$( type -a "$1" 2>/dev/null )
@@ -313,53 +359,67 @@ while [[ $# -ne 0 ]]; do
         print_declare "$1"
     fi
 
-    # Test with `file`.
-    retval=$( file -b "$1" )
-    if [[ $? -eq 0 ]] && ! [[ "${retval}" =~ $NO_SUCH_FILE_REGEX ]]; then
-        echo "File $1 is $retval"
-    fi
+    print_file_type "$1"
 
     # Check if `info` has a page.
-    INFO_NO_MENU_REGEX='^info: No menu item .*'
-    INFO_NO_NODE_REGEX='^info: Cannot find node .*'
-    retval=$( info -o - "$1" 2>&1 )
-    if [[ -n "$retval" ]] && ! [[ "$retval" =~ $INFO_NO_MENU_REGEX ]] \
-          && ! [[ "$retval" =~ $INFO_NO_NODE_REGEX ]]; then
+    retval=$( info -w "$1" )
+    if [[ $? -eq 0 ]] && [[ -n "$retval" ]] && [[ "$retval" != 'dir' ]] \
+       && [[ $(readlink -f "${retval}") != $(readlink -f "$1") ]]; then
         echo "There is an \"info\" page for $1."
+        FOUND=true
     fi
 
     # Use `which`.
     retval=$( which -a "$1" 2>/dev/null )
     if [[ $? -eq 0 ]]; then
-        echo "There is an executable called $1 here: $retval"
-        retval=$( file -b "$retval" )
-        if [[ $? -eq 0 ]] && ! [[ "${retval}" =~ $NO_SUCH_FILE_REGEX ]]; then
-            echo "File $1 is $retval"
+        if [[ "${1}" =~ ^/ ]]; then
+            # We have an absolute path.
+            echo "There is an executable called $1."
+        elif [[ $(wc -l <<< "${retval}") -gt 1 ]]; then
+            # We have several paths.
+            echo "There is are several executables called $1 here:"
+            echo "${retval}"
+        else
+            echo "There is an executable called $1 here: $retval"
         fi
+        print_file_type "${retval}"
     fi
 
     # Check for a `man` page.
-    retval=$( ${whatis_cmd} "$1" 2>/dev/null )
+    retval=$( man --whatis "$1" 2>/dev/null )
     if [[ $? -eq 0 ]]; then
-        echo "There is an \"man\" page for $1: $retval"
+        echo "There is a \"man\" page for $1: $retval"
+        FOUND=true
     fi
 
     # Check aliases in the current shell.
     alias "$1" 2>/dev/null > $temp_file     # Can't create sub-shell w/o losing aliases.
     if [[ $? -eq 0 ]]; then
         echo "There is an alias for $1: $(cat $temp_file)"
+        FOUND=true
     fi
 
     # If aliases are piped in:
     if [[ -n "${aliases[$1]}" ]]; then
-        echo "There is an alias for $1: ${aliases[$1]} in stdin."
+        echo "There is an alias for $1 in stdin: ${aliases[$1]}"
+        FOUND=true
     fi
 
     # Is this program running?
     echo "${progs}" | grep "^$1\$" >/dev/null
     if [[ $? -eq 0 ]]; then
         echo "There is at least one process running called $1."
+        FOUND=true
+    fi
+
+    if [[ "${FOUND}" == false ]]; then
+        echo "Nothing found for \"$1\"."
+    fi
+
+    if [[ "${separate}" == 1 ]]; then
+        echo
     fi
 
     shift
 done
+
