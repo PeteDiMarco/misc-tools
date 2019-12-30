@@ -67,15 +67,16 @@ print_declare () {
     attr_desc['x']='exported'
 
     # Extract attributes followed by NAME or NAME=VALUE:
-    retval=$(declare -p "$1" 2>/dev/null | grep '^declare ' | sed -e 's/^declare \(-[^ ]*\) \(.*\)$/\1 \2/')
+    retval=$( declare -p "$1" 2>/dev/null | grep '^declare ' | \
+              sed -e 's/^declare \(-[^ ]*\) \(.*\)$/\1 \2/')
     if [[ $? -eq 0 ]] && [[ -n "${retval}" ]]; then
         debug_msg "print_declare: retval=${retval}"
-        attrs=$(echo $retval | sed -e 's/^-\([^ ]*\) .*$/\1/' | sed -e 's/\(.\)/\1 /g' )
-        name=$(echo $retval | sed -e 's/^[^ ]* //')
+        attrs=$( sed -e 's/^-\([^ ]*\) .*$/\1/' <<< $retval | sed -e 's/\(.\)/\1 /g' )
+        name=$( sed -e 's/^[^ ]* //' <<< $retval )
         value=''
         if [[ "${name}" == *=* ]]; then
-          value=$(echo $name | sed -e 's/^[^=]*=//')
-          name=$(echo $name | sed -e 's/=.*$//')
+          value=$( sed -e 's/^[^=]*=//' <<< $name )
+          name=$( sed -e 's/=.*$//' <<< $name )
         fi
 
         # For each attribute, add its description to full_desc:
@@ -156,7 +157,7 @@ parse_type () {
                 ;;
 
             *\ is\ *)
-                filename=$(echo ${array[$index]} | sed -e 's/^.* is //')
+                filename=$( sed -e 's/^.* is //' <<< ${array[$index]} )
                 echo "$2 is the executable file $filename"
                 FOUND=true
                 ;;
@@ -257,14 +258,6 @@ print_file_type () {
 # Main Code
 #***************************************************************************
 
-# Get the names of all the running processes.
-# Process names in brackets []:
-progs=$(ps --no-headers -Ao args -ww | grep '^\[' | sed -Ee 's/^\[([^]/:]+).*$/\1/')
-# Process names without brackets:
-progs=${progs}$(ps --no-headers -Ao args -ww | grep -v '^\[' | sed -e 's/ .*$//')
-progs=$(echo "${progs}" | sort | uniq | xargs basename -a)
-debug_msg "Programs running: ${progs}"
-
 # Make sure we have the correct version of get_opt:
 getopt --test > /dev/null
 if [[ $? -ne 4 ]]; then
@@ -304,8 +297,8 @@ while true; do
 
         -a|--aliases)
             while IFS= read -r line; do
-                key=$(echo "$line" | sed -e 's/^alias \([^=]*\).*$/\1/')
-                val=$(echo "$line" | sed -e 's/^[^=]*=\(.*\)$/\1/')
+                key=$(sed -e 's/^alias \([^=]*\).*$/\1/' <<< "$line")
+                val=$(sed -e 's/^[^=]*=\(.*\)$/\1/' <<< "$line")
                 aliases["$key"]="$val"
             done
             shift
@@ -334,6 +327,48 @@ trap "rm -f $temp_file" 0 2 3 15
 # report.
 separate=$(( $# > 1 ))
 
+
+# Get scannable lists:
+
+# Get the names of all the running processes.
+# Process names in brackets []:
+progs=$(ps --no-headers -Ao args -ww | grep '^\[' | sed -Ee 's/^\[([^]/:]+).*$/\1/')
+# Process names without brackets and append to progs:
+progs=${progs}$(ps --no-headers -Ao args -ww | grep -v '^\[' | sed -e 's/ .*$//')
+# Filter and sort progs:
+progs=$(echo "${progs}" | sort | uniq | xargs basename -a)
+debug_msg "Programs running: ${progs}"
+
+# Is KDE being used?
+kde_applet_list=
+retval=$( which kpackagetool5 2>/dev/null )
+if [[ $? -eq 0 ]]; then
+    kde_applet_list=$( "${retval}" --list --type Plasma/Applet -g | \
+                       grep -v '^Listing service types:' | \
+                       sed -e 's/^org\.kde\.plasma\.//' )
+fi
+
+# Get list of packages:
+packages=
+if which dpkg >/dev/null 2>&1; then
+    packages=${packages}$( dpkg -l | grep '^ii'| sed -e 's/   */\t/g' | \
+                           cut -f 2 | sed -e 's/:.*$//' )
+fi
+if which snap >/dev/null 2>&1; then
+    packages=${packages}$( snap list --all | sed -e 's/ .*$//' )
+fi
+#if which rpm >/dev/null 2>&1; then
+#    packages=${packages}$( rpm -qa  )
+#fi
+
+# TODO
+# Ruby packages:
+# gem list
+# Python packages:
+# pip list, pip3 list, pip2 list, conda list
+# Node:
+# npm list -parseable
+
 # Iterate through all remaining arguments.
 while [[ $# -ne 0 ]]; do
     debug_msg "Examining ${1}."
@@ -345,7 +380,7 @@ while [[ $# -ne 0 ]]; do
     fi
 
     if [[ "$1" =~ $SHELL_VAR_REGEX ]]; then
-        retval=$( echo "$1" | sed -e 's/^\$//' )
+        retval=$( sed -e 's/^\$//' <<< "$1" )
         check_variable "${retval}"
     fi
 
@@ -406,10 +441,27 @@ while [[ $# -ne 0 ]]; do
     fi
 
     # Is this program running?
-    echo "${progs}" | grep "^$1\$" >/dev/null
-    if [[ $? -eq 0 ]]; then
-        echo "There is at least one process running called $1."
-        FOUND=true
+    if [[ -n "${progs}" ]]; then
+        if grep "^$1\$" >/dev/null 2>&1 <<< ${progs}; then
+            echo "There is at least one process running called $1."
+            FOUND=true
+        fi
+    fi
+
+    # Is this a system package?
+    if [[ -n "${packages}" ]]; then
+        if grep "^$1\$" >/dev/null 2>&1 <<< ${packages}; then
+            echo "There is a package called $1."
+            FOUND=true
+        fi
+    fi
+
+    # Is this a KDE applet/widget?
+    if [[ -n "${kde_applet_list}" ]]; then
+        if grep "^$1\$" >/dev/null 2>&1 <<< ${kde_applet_list}; then
+            echo "There is a KDE applet/widget called $1."
+            FOUND=true
+        fi
     fi
 
     if [[ "${FOUND}" == false ]]; then
