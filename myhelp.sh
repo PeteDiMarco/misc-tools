@@ -36,10 +36,18 @@ FOUND=false				# Found something about current argument.
 my_name=$(basename "$0")		# This script's name.
 my_shell=$(basename "$BASH")		# This script's shell.
 preferred_shell=$(basename "$SHELL")	# User's shell from passwd.
-declare -A aliases=()			# Hash of aliases to values.
+declare -A ALIASES=()			# Hash of aliases to values.
+declare -A PACKAGES=()			# Hash of package types to package lists.
 
 NO_SUCH_FILE_REGEX='.*No such file or directory.*'
 SHELL_VAR_REGEX='^\$.+$'
+
+# We need a temporary file to store the output of `alias`.
+temp_file=$(mktemp /tmp/${my_name}.XXXXXX)
+trap "rm -f $temp_file" 0 2 3 15
+
+# Are we being sourced?
+(return 0 2>/dev/null) && SOURCED=1 || SOURCED=0
 
 
 #***************************************************************************
@@ -163,8 +171,7 @@ parse_type () {
                 ;;
 
             *)
-                echo "Unrecognized type: $1"
-                #exit 3
+                echo "ERROR: Unrecognized type: $1"
                 return 3
                 ;;
         esac
@@ -189,6 +196,7 @@ debug_msg () {
 # Name:         print_help
 # Description:  Prints the help text and exits the script.
 # Parameters:   None.
+# Globals:      my_name
 # Returns:      None.
 #***************************************************************************
 print_help () {
@@ -208,9 +216,8 @@ or pipe the current aliases into the script:
 Optional Arguments:
   -h, --help            Show this help message and exit.
   -a, --aliases         Read a list of aliases from standard input.
-  -D, --DEBUG	          Set debugging mode.
+  -D, --DEBUG	        Set debugging mode.
 HelpInfoHERE
-    exit 0
 }
 
 #***************************************************************************
@@ -253,6 +260,53 @@ print_file_type () {
     done
 }
 
+#***************************************************************************
+# Name:         read_packages
+# Description:  Reads a list of packages into the PACKAGES hash.
+# Parameters:   $1: Package type
+#               $2: Package command
+#               $3: Package command filter
+# Globals:      PACKAGES
+# Returns:      None.
+#***************************************************************************
+read_packages() {
+    debug_msg "read_packages: $1, $2, $3"
+
+    if [[ -n "${PACKAGES[$1]}" ]]; then
+        echo "ERROR: PACKAGES already contains a list of type ${1}.  It's value is:"
+        echo "${PACKAGES[$1]}"
+        return 1
+    fi
+
+#    PACKAGES["$1"]=
+    if which "$2" >/dev/null 2>&1; then
+        PACKAGES["$1"]=$(eval $3)
+    fi
+}
+
+#***************************************************************************
+# Name:         search_packages
+# Description:  Searches lists of packages in the PACKAGES hash.
+# Parameters:   $1: Package name
+# Globals:      PACKAGES
+# Returns:      None.
+#***************************************************************************
+search_packages() {
+    local k
+
+    debug_msg "search_packages: $1"
+
+    for k in "${!PACKAGES[@]}"
+    do
+        if [[ -n "${PACKAGES[$k]}" ]]; then
+            if grep "^$1\$" >/dev/null 2>&1 <<< ${PACKAGES[$k]}; then
+                echo "There is a $k called $1."
+                FOUND=true
+            fi
+        fi
+    done
+}
+
 
 #***************************************************************************
 # Main Code
@@ -262,8 +316,11 @@ print_file_type () {
 getopt --test > /dev/null
 if [[ $? -ne 4 ]]; then
     echo "ERROR: This script requires the enhanced version of 'getopt'."
-    #exit 4
-    return 4
+    if [[ "${SOURCED}" -eq 1 ]]; then
+        return 4
+    else
+        exit 4
+    fi
 fi
 
 # Parse commandline options:
@@ -273,9 +330,12 @@ LONGOPTIONS='help,DEBUG,aliases'
 PARSED=$(getopt --options=$OPTIONS --longoptions=$LONGOPTIONS --name "$0" -- "$@")
 if [[ $? -ne 0 ]]; then
     # If getopt has complained about wrong arguments to stdout:
-    echo 'Bad arguments.'
-    #exit 2
-    return 2
+    echo 'ERROR: Bad arguments.'
+    if [[ "${SOURCED}" -eq 1 ]]; then
+        return 2
+    else
+        exit 2
+    fi
 fi
 
 # Read getopt's output this way to handle the quoting right:
@@ -286,8 +346,11 @@ while true; do
     case "$1" in
         -h|--help)
             print_help
-            #exit 0
-            return 0
+            if [[ "${SOURCED}" -eq 1 ]]; then
+                return 0
+            else
+                exit 0
+            fi
             ;;
 
         -D|--DEBUG)
@@ -299,7 +362,7 @@ while true; do
             while IFS= read -r line; do
                 key=$(sed -e 's/^alias \([^=]*\).*$/\1/' <<< "$line")
                 val=$(sed -e 's/^[^=]*=\(.*\)$/\1/' <<< "$line")
-                aliases["$key"]="$val"
+                ALIASES["$key"]="$val"
             done
             shift
             ;;
@@ -312,21 +375,19 @@ while true; do
         *)
             echo "Unrecognized option: $1"
             print_help
-            #exit 3
-            return 3
+            if [[ "${SOURCED}" -eq 1 ]]; then
+                return 3
+            else
+                exit 3
+            fi
             ;;
     esac
 done
 
 
-# We need a temporary file to store the output of `alias`.
-temp_file=$(mktemp /tmp/${my_name}.XXXXXX)
-trap "rm -f $temp_file" 0 2 3 15
-
 # If the user supplies more than 1 argument, print a blank line between each
 # report.
 separate=$(( $# > 1 ))
-
 
 # Get scannable lists:
 
@@ -337,37 +398,44 @@ progs=$(ps --no-headers -Ao args -ww | grep '^\[' | sed -Ee 's/^\[([^]/:]+).*$/\
 progs=${progs}$(ps --no-headers -Ao args -ww | grep -v '^\[' | sed -e 's/ .*$//')
 # Filter and sort progs:
 progs=$(echo "${progs}" | sort | uniq | xargs basename -a)
-debug_msg "Programs running: ${progs}"
 
-# Is KDE being used?
-kde_applet_list=
-retval=$( which kpackagetool5 2>/dev/null )
-if [[ $? -eq 0 ]]; then
-    kde_applet_list=$( "${retval}" --list --type Plasma/Applet -g | \
-                       grep -v '^Listing service types:' | \
-                       sed -e 's/^org\.kde\.plasma\.//' )
-fi
+read_packages 'KDE applet' 'kpackagetool5' \
+              "kpackagetool5 --list --type Plasma/Applet -g | \
+               grep -v '^Listing service types:' | sed -e 's/^org\.kde\.plasma\.//'"
 
-# Get list of packages:
-packages=
-if which dpkg >/dev/null 2>&1; then
-    packages=${packages}$( dpkg -l | grep '^ii'| sed -e 's/   */\t/g' | \
-                           cut -f 2 | sed -e 's/:.*$//' )
-fi
-if which snap >/dev/null 2>&1; then
-    packages=${packages}$( snap list --all | sed -e 's/ .*$//' )
-fi
-#if which rpm >/dev/null 2>&1; then
-#    packages=${packages}$( rpm -qa  )
-#fi
+read_packages 'Debian package' 'dpkg' \
+              "dpkg -l | grep '^ii'| sed -e 's/   */\t/g' | cut -f 2 | sed -e 's/:.*$//'"
 
-# TODO
-# Ruby packages:
-# gem list
-# Python packages:
-# pip list, pip3 list, pip2 list, conda list
-# Node:
-# npm list -parseable
+read_packages 'Snap package' 'snap' \
+              "snap list --all | sed -e 's/ .*$//'"
+
+read_packages 'Red Hat package' 'rpm' \
+              "rpm -qa"
+
+read_packages 'Ruby package' 'gem' \
+              "gem list | sed -e 's/ (.*$//'"
+
+read_packages 'Python package' 'pip' \
+              "pip list 2>/dev/null | sed -e 's/  .*$//'"
+
+read_packages 'Python2 package' 'pip2' \
+              "pip2 list 2>/dev/null | sed -e 's/  .*$//'"
+
+read_packages 'Python3 package' 'pip3' \
+              "pip3 list 2>/dev/null | sed -e 's/  .*$//'"
+
+read_packages 'Python conda package' 'conda' \
+              "conda list | sed -e 's/  .*$//'"
+
+#read_packages 'Node JavaScript package' 'npm' \
+#              "npm ls -parseable"
+
+#read_packages 'Yarn JavaScript package' 'yarn' \
+#              "yarn list"
+
+# TODO:  Rust: cargo or rustup?
+# Perl or PHP?
+
 
 # Iterate through all remaining arguments.
 while [[ $# -ne 0 ]]; do
@@ -435,8 +503,8 @@ while [[ $# -ne 0 ]]; do
     fi
 
     # If aliases are piped in:
-    if [[ -n "${aliases[$1]}" ]]; then
-        echo "There is an alias for $1 in stdin: ${aliases[$1]}"
+    if [[ -n "${ALIASES[$1]}" ]]; then
+        echo "There is an alias for $1 in stdin: ${ALIASES[$1]}"
         FOUND=true
     fi
 
@@ -448,21 +516,8 @@ while [[ $# -ne 0 ]]; do
         fi
     fi
 
-    # Is this a system package?
-    if [[ -n "${packages}" ]]; then
-        if grep "^$1\$" >/dev/null 2>&1 <<< ${packages}; then
-            echo "There is a package called $1."
-            FOUND=true
-        fi
-    fi
-
-    # Is this a KDE applet/widget?
-    if [[ -n "${kde_applet_list}" ]]; then
-        if grep "^$1\$" >/dev/null 2>&1 <<< ${kde_applet_list}; then
-            echo "There is a KDE applet/widget called $1."
-            FOUND=true
-        fi
-    fi
+    # Is this a package?
+    search_packages "$1"
 
     if [[ "${FOUND}" == false ]]; then
         echo "Nothing found for \"$1\"."
