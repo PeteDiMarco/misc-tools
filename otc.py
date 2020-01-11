@@ -144,13 +144,29 @@ class EncryptMap:
         def append(self, elt):
             self.list.append(elt)
 
-        def next(self):
-            retval = self.list[self.index]  # Throws an exception if out of range.
-            self.index += 1
-            return retval
+#        def next(self):
+#            retval = self.list[self.index]  # Throws an exception if out of range.
+#            self.index += 1
+#            return retval
 
         def reset(self):
             self.index = 0
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            """
+            This method is handling state and informing
+            the container of the iterator where we are
+            currently pointing to within our data collection.
+            """
+            if self.index > len(self.list)-1:
+                raise StopIteration
+
+            value = self.list[self.index]
+            self.index += 1
+            return value
 
     def __init__(self, map_fp, strict: bool = True):
         """
@@ -235,7 +251,7 @@ class EncryptMap:
             fp.seek(new_index)
             current_byte = fp.read(1)
             while (
-                    len(current_byte) == 1 and new_index < index and current_byte != target_byte
+                len(current_byte) == 1 and new_index < index and current_byte != target_byte
             ):
                 current_byte = fp.read(1)
                 new_index += 1
@@ -253,15 +269,17 @@ class EncryptMap:
         :rtype: int
         """
         try:
-            index = self.map[byte].next()
+            index = next(self.map[byte])
         except IndexError:
+            raise MapError(f"Map does not contain the key {byte}.")
+        except StopIteration:
             # If self.strict is True, then fail with error.
-            # Otherwise, do self.map[byte].reset(), then self.map[byte].next().
+            # Otherwise, do self.map[byte].reset(), then next(self.map[byte]).
             if self.strict:
                 raise MapError("Map file not complex enough.")
             else:
                 self.map[byte].reset()
-                index = self.map[byte].next()
+                index = next(self.map[byte])
         return index
 
 
