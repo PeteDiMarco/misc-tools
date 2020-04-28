@@ -157,6 +157,11 @@ parse_type () {
                 FOUND=true
                 ;;
 
+            *\ is\ hashed\ \(*)
+                echo 'WARNING: ' ${array[$index]} '.  USE "hash -r" TO CLEAR.'
+                FOUND=true
+                ;;
+
             *\ \(\))
                 index=$((index + 1))
                 while [[ ! ${array[$index]} =~ ^\}\s*$ ]]; do
